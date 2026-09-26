@@ -5,6 +5,8 @@ use gns_sys::{
     ESteamNetworkingConnectionState, HSteamNetConnection, ISteamNetworkingConnectionSignaling,
     ISteamNetworkingSockets, SteamNetConnectionInfo_t, SteamNetworkingConfigValue_t,
     SteamNetworkingErrMsg, K_CCH_MAX_STEAMNETWORKING_ERR_MSG, K_ERESULT_OK,
+    K_ESTEAMNETWORKINGCONFIG_FAKE_PACKET_LAG_RECV, K_ESTEAMNETWORKINGCONFIG_FAKE_PACKET_LAG_SEND,
+    K_ESTEAMNETWORKINGCONFIG_FAKE_PACKET_LOSS_RECV, K_ESTEAMNETWORKINGCONFIG_FAKE_PACKET_LOSS_SEND,
     K_ESTEAMNETWORKINGCONFIG_SYMMETRIC_CONNECT, K_ESTEAMNETWORKINGCONNECTIONSTATE_CLOSED_BY_PEER,
     K_ESTEAMNETWORKINGCONNECTIONSTATE_CONNECTED, K_ESTEAMNETWORKINGCONNECTIONSTATE_CONNECTING,
     K_ESTEAMNETWORKINGCONNECTIONSTATE_FINDING_ROUTE, K_ESTEAMNETWORKINGCONNECTIONSTATE_NONE,
@@ -97,6 +99,38 @@ impl Gns {
     /// Pumps GNS's internal callback queue; call regularly (see README.md).
     pub fn run_callbacks(&self) {
         unsafe { gns_sys::SteamAPI_ISteamNetworkingSockets_RunCallbacks(self.interface) }
+    }
+
+    /// Enables GNS's fake packet loss/lag simulation for repeatable
+    /// degraded-network testing. Global, not per-connection (README.md).
+    pub fn simulate_network_conditions(&self, packet_loss_pct: f32, lag_ms: i32) {
+        let utils = unsafe { gns_sys::SteamAPI_SteamNetworkingUtils_v003() };
+        unsafe {
+            gns_sys::SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueFloat(
+                utils,
+                K_ESTEAMNETWORKINGCONFIG_FAKE_PACKET_LOSS_SEND,
+                packet_loss_pct,
+            );
+            gns_sys::SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueFloat(
+                utils,
+                K_ESTEAMNETWORKINGCONFIG_FAKE_PACKET_LOSS_RECV,
+                packet_loss_pct,
+            );
+            gns_sys::SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueInt32(
+                utils,
+                K_ESTEAMNETWORKINGCONFIG_FAKE_PACKET_LAG_SEND,
+                lag_ms,
+            );
+            gns_sys::SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueInt32(
+                utils,
+                K_ESTEAMNETWORKINGCONFIG_FAKE_PACKET_LAG_RECV,
+                lag_ms,
+            );
+        }
+    }
+
+    pub fn clear_simulated_network_conditions(&self) {
+        self.simulate_network_conditions(0.0, 0);
     }
 
     /// Initiates a P2P connection using a caller-supplied signaling

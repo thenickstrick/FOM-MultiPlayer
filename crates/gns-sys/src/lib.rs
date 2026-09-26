@@ -37,6 +37,17 @@ pub const K_ESTEAMNETWORKINGCONNECTIONSTATE_PROBLEM_DETECTED_LOCALLY: ESteamNetw
 pub const K_ESTEAMNETWORKINGCONFIG_SYMMETRIC_CONNECT: ESteamNetworkingConfigValue = 37;
 
 pub const K_ESTEAMNETWORKINGCONFIG_INT32: ESteamNetworkingConfigDataType = 1;
+pub const K_ESTEAMNETWORKINGCONFIG_FLOAT: ESteamNetworkingConfigDataType = 3;
+
+/// [global float, 0-100] percent of packets to randomly discard
+/// (steamnetworkingtypes.h:1419-1420). Global, not per-connection: applied
+/// at a low UDP layer.
+pub const K_ESTEAMNETWORKINGCONFIG_FAKE_PACKET_LOSS_SEND: ESteamNetworkingConfigValue = 2;
+pub const K_ESTEAMNETWORKINGCONFIG_FAKE_PACKET_LOSS_RECV: ESteamNetworkingConfigValue = 3;
+/// [global int32] delay all outbound/inbound packets by N ms
+/// (steamnetworkingtypes.h:1423-1424).
+pub const K_ESTEAMNETWORKINGCONFIG_FAKE_PACKET_LAG_SEND: ESteamNetworkingConfigValue = 4;
+pub const K_ESTEAMNETWORKINGCONFIG_FAKE_PACKET_LAG_RECV: ESteamNetworkingConfigValue = 5;
 
 /// `k_cchMaxSteamNetworkingErrMsg` (steamnetworkingtypes.h:88).
 pub const K_CCH_MAX_STEAMNETWORKING_ERR_MSG: usize = 1024;
@@ -181,6 +192,12 @@ impl SteamNetworkingConfigValue_t {
     }
 }
 
+// ---- ISteamNetworkingUtils (only the global-config setters used for
+// network-condition simulation; see docs/dependency-policy.md-adjacent
+// discipline of binding only what's actually used) --------------------------
+
+pub enum ISteamNetworkingUtils {}
+
 // ---- Opaque interface handle -----------------------------------------------
 // Never held except as a pointer (see README.md); empty enum is the
 // standard Rust idiom for that.
@@ -299,5 +316,21 @@ extern "C" {
         ctx: *mut c_void,
         fnOnConnectRequest: FSteamNetworkingCustomSignalingRecvContext_OnConnectRequest,
         fnSendRejectionSignal: Option<FSteamNetworkingCustomSignalingRecvContext_SendRejectionSignal>,
+    ) -> bool;
+
+    // steamnetworkingsockets_flat.h — ISteamNetworkingUtils (global config
+    // only; used to drive GNS's built-in network-condition simulation).
+    pub fn SteamAPI_SteamNetworkingUtils_v003() -> *mut ISteamNetworkingUtils;
+
+    pub fn SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueInt32(
+        self_: *mut ISteamNetworkingUtils,
+        eValue: ESteamNetworkingConfigValue,
+        val: i32,
+    ) -> bool;
+
+    pub fn SteamAPI_ISteamNetworkingUtils_SetGlobalConfigValueFloat(
+        self_: *mut ISteamNetworkingUtils,
+        eValue: ESteamNetworkingConfigValue,
+        val: f32,
     ) -> bool;
 }

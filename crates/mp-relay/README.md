@@ -57,7 +57,26 @@ the host side reacts, matching mp-signal's own host/join distinction.
 ephemeral port (requires `cargo build -p mp-signal` first if testing
 `mp-relay` in isolation; `cargo test --workspace` builds it automatically).
 
-The integration test rendezvous-es both sides through mp-signal *before*
-driving either: a real host only shares its code once mp-signal has
+`connect_and_drive` rendezvous-es both sides through mp-signal *before*
+driving either — a real host only shares its code once mp-signal has
 confirmed registration, so a join attempt never races the host's
-registration in practice, and the test shouldn't either.
+registration in practice, and the test shouldn't either — then drives
+both relay loops concurrently (host on a background thread, join on the
+caller's thread) to their respective stop conditions or `deadline`.
+
+`connect_pair_raw` is the same rendezvous, but stops as soon as both
+sides are `Connected` rather than pumping messages, and hands back the
+live connections instead of a `RelayActivity` summary — for tests that
+need to manipulate a connection directly (e.g. closing one side to
+observe how the other reacts).
+
+`gns_test_lock` serializes every GNS-touching test in this crate: GNS's
+fake loss/lag knobs (see the `gns` crate's README) are process-global,
+and `cargo test` runs this crate's tests concurrently on separate threads
+in one process, so without this a lag/loss test could leak its settings
+into a sibling test's handshake timing.
+
+The reconnect-cycle test relies on `GnsConnection`/mp-signal sockets
+being dropped when `drive`/`connect_and_drive` return, so a repeated
+call is a genuinely fresh session — mp-signal frees a room code once
+claimed (see `crates/mp-signal`).

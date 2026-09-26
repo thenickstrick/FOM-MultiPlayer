@@ -35,6 +35,16 @@ poll loop that drives everything else; GNS's underlying networking
 thread runs independently, but connection bookkeeping is only serviced
 when this is called.
 
+## `simulate_network_conditions`/`clear_simulated_network_conditions`
+
+Enables GNS's built-in fake packet loss/lag simulation, for repeatable
+degraded-network testing without real hardware. These are **global**
+settings (GNS applies them at a low UDP layer with no per-connection
+context), so they affect every connection in this process, including
+unrelated ones — tests that use this must serialize against other
+GNS-using tests in the same test binary (see `mp-relay`'s `gns_test_lock`)
+and call `clear_simulated_network_conditions` when done.
+
 ## `connect_p2p_custom_signaling`
 
 `on_signal` is called (possibly from GNS's own thread) with each

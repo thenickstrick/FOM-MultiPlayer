@@ -169,7 +169,15 @@ fn pump_incoming(conn: &GnsConnection, files: &SharedFiles, activity: &mut Relay
 mod tests {
     use super::*;
     use std::process::{Child, Command};
+    use std::sync::OnceLock;
     use std::time::Duration;
+
+    /// Serializes GNS-touching tests against process-global fake loss/lag
+    /// settings (see README.md).
+    fn gns_test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     /// The real, spawned `mp-signal` process (see README.md).
     struct SignalServer {
@@ -238,47 +246,100 @@ mod tests {
         dir
     }
 
-    #[test]
-    fn host_and_join_exchange_player_state_and_snapshot_via_mp_signal() {
-        let (_server, addr) = spawn_signal_server();
-        let gns = Gns::init().expect("GNS init");
-        let code = "TESTROOM";
+    /// Rendezvous-es both sides, then drives both relay loops concurrently
+    /// to their stop conditions or `deadline` (see README.md).
+    fn connect_and_drive(
+        addr: &str,
+        code: &str,
+        host_files: SharedFiles,
+        join_files: SharedFiles,
+        deadline: Instant,
+        mut host_stop: impl FnMut(&RelayActivity) -> bool + Send + 'static,
+        mut join_stop: impl FnMut(&RelayActivity) -> bool,
+    ) -> (io::Result<RelayActivity>, io::Result<RelayActivity>) {
+        let gns_host = Gns::init().expect("GNS init (host)");
+        let gns_join = Gns::init().expect("GNS init (join)");
 
-        let host_dir = tempdir("host");
-        let join_dir = tempdir("join");
-        let host_files = SharedFiles::new(&host_dir);
-        let join_files = SharedFiles::new(&join_dir);
+        let host_stream = signal_link::rendezvous(addr, Role::Host, code).expect("host rendezvous");
+        let join_stream = signal_link::rendezvous(addr, Role::Join, code).expect("join rendezvous");
 
-        // Seed each side's outgoing files before starting the relay loop,
-        // as the GML mod would.
+        let host_handle =
+            thread::spawn(move || drive(&gns_host, host_stream, false, &host_files, deadline, &mut host_stop));
+        let join_result = drive(&gns_join, join_stream, true, &join_files, deadline, &mut join_stop);
+        let host_result = host_handle.join().unwrap();
+        (host_result, join_result)
+    }
+
+    /// Like `connect_and_drive` but hands back the live connections
+    /// instead of driving them (see README.md).
+    fn connect_pair_raw<'g>(gns_host: &'g Gns, gns_join: &'g Gns, addr: &str, code: &str) -> (GnsConnection<'g>, GnsConnection<'g>) {
+        let host_stream = signal_link::rendezvous(addr, Role::Host, code).expect("host rendezvous");
+        let join_stream = signal_link::rendezvous(addr, Role::Join, code).expect("join rendezvous");
+
+        let host_incoming = spawn_signal_reader(host_stream.try_clone().unwrap());
+        let host_write = Arc::new(Mutex::new(host_stream));
+        let join_incoming = spawn_signal_reader(join_stream.try_clone().unwrap());
+        let join_write = Arc::new(Mutex::new(join_stream));
+
+        let join_conn = gns_join.connect_p2p_custom_signaling(make_signal_sender(join_write), false);
+        let mut host_conn: Option<GnsConnection> = None;
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            gns_host.run_callbacks();
+            gns_join.run_callbacks();
+
+            while let Ok(frame) = join_incoming.try_recv() {
+                let _ = gns_join.receive_signal(&frame, |_hconn| None);
+            }
+            while let Ok(frame) = host_incoming.try_recv() {
+                let host_write = host_write.clone();
+                if let Some(conn) = gns_host.receive_signal(&frame, move |_hconn| Some(make_signal_sender(host_write.clone()))) {
+                    let _ = conn.accept();
+                    host_conn = Some(conn);
+                }
+            }
+
+            let host_connected = host_conn.as_ref().map(|c| c.state()) == Some(ConnectionState::Connected);
+            if join_conn.state() == ConnectionState::Connected && host_connected {
+                break;
+            }
+            if Instant::now() > deadline {
+                panic!("connect_pair_raw: did not reach Connected in time");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        (host_conn.unwrap(), join_conn)
+    }
+
+    fn seed_player_states(host_files: &SharedFiles, join_files: &SharedFiles) {
         file_store::write_atomic(&host_files.local_state, br#"{"player_id":"host","x":1,"y":2}"#).unwrap();
         file_store::write_atomic(&join_files.local_state, br#"{"player_id":"join","x":3,"y":4}"#).unwrap();
+    }
+
+    #[test]
+    fn host_and_join_exchange_player_state_and_snapshot_via_mp_signal() {
+        let _lock = gns_test_lock().lock().unwrap();
+        let (_server, addr) = spawn_signal_server();
+
+        let host_files = SharedFiles::new(&tempdir("host"));
+        let join_files = SharedFiles::new(&tempdir("join"));
+        seed_player_states(&host_files, &join_files);
         file_store::write_atomic(&host_files.snapshot_out, br#"{"tiles":[1,2,3]}"#).unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(15);
-
-        // Rendezvous both sides before driving either (see README.md).
-        let host_stream = signal_link::rendezvous(&addr, Role::Host, code).expect("host rendezvous");
-        let join_stream = signal_link::rendezvous(&addr, Role::Join, code).expect("join rendezvous");
-
         // Only the host sends a snapshot in this test, so the host's stop
         // condition can't wait on `received_snapshot` — nothing ever sends
         // it one.
-        let host_handle = thread::spawn(move || {
-            drive(&gns, host_stream, false, &host_files, deadline, &mut |a| {
-                a.sent_player_state && a.received_player_state && a.sent_snapshot
-            })
-        });
-
-        // gns is not Clone; drive join on the same instance from this
-        // thread by re-deriving a handle. Gns::init() is idempotent
-        // (Once-guarded), so this returns the same underlying interface.
-        let gns_join = Gns::init().expect("GNS init (join)");
-        let join_result = drive(&gns_join, join_stream, true, &join_files, deadline, &mut |a| {
-            a.received_player_state && a.received_snapshot
-        });
-
-        let host_result = host_handle.join().unwrap();
+        let (host_result, join_result) = connect_and_drive(
+            &addr,
+            "TESTROOM",
+            host_files.clone(),
+            join_files.clone(),
+            deadline,
+            |a| a.sent_player_state && a.received_player_state && a.sent_snapshot,
+            |a| a.received_player_state && a.received_snapshot,
+        );
 
         let join_activity = join_result.expect("join relay loop failed");
         let host_activity = host_result.expect("host relay loop failed");
@@ -291,12 +352,177 @@ mod tests {
         assert!(join_activity.received_snapshot, "join never received snapshot");
 
         let received_snapshot = file_store::read_shared(&join_files.snapshot_in).unwrap().unwrap();
-        let value = mp_proto::RelayMessage::parse(&received_snapshot).unwrap();
-        match value {
+        match RelayMessage::parse(&received_snapshot).unwrap() {
             RelayMessage::Snapshot { payload } => {
                 assert_eq!(payload.get("tiles").unwrap().as_array().unwrap().len(), 3);
             }
             other => panic!("expected Snapshot, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn full_snapshot_transfer_in_both_directions() {
+        let _lock = gns_test_lock().lock().unwrap();
+        let (_server, addr) = spawn_signal_server();
+
+        let host_files = SharedFiles::new(&tempdir("host-bidi-snap"));
+        let join_files = SharedFiles::new(&tempdir("join-bidi-snap"));
+        file_store::write_atomic(&host_files.snapshot_out, br#"{"from":"host"}"#).unwrap();
+        file_store::write_atomic(&join_files.snapshot_out, br#"{"from":"join"}"#).unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let (host_result, join_result) = connect_and_drive(
+            &addr,
+            "BIDISNAP",
+            host_files.clone(),
+            join_files.clone(),
+            deadline,
+            |a| a.sent_snapshot && a.received_snapshot,
+            |a| a.sent_snapshot && a.received_snapshot,
+        );
+
+        assert!(host_result.expect("host relay loop failed").received_snapshot);
+        assert!(join_result.expect("join relay loop failed").received_snapshot);
+
+        let host_got = file_store::read_shared(&host_files.snapshot_in).unwrap().unwrap();
+        let join_got = file_store::read_shared(&join_files.snapshot_in).unwrap().unwrap();
+        match RelayMessage::parse(&host_got).unwrap() {
+            RelayMessage::Snapshot { payload } => assert_eq!(payload.get("from").unwrap().as_str(), Some("join")),
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
+        match RelayMessage::parse(&join_got).unwrap() {
+            RelayMessage::Snapshot { payload } => assert_eq!(payload.get("from").unwrap().as_str(), Some("host")),
+            other => panic!("expected Snapshot, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn reconnect_cycle_after_a_completed_session_succeeds_again() {
+        let _lock = gns_test_lock().lock().unwrap();
+        let (_server, addr) = spawn_signal_server();
+        let code = "RECONNECT";
+
+        for attempt in 1..=2 {
+            let host_files = SharedFiles::new(&tempdir(&format!("host-reconnect-{attempt}")));
+            let join_files = SharedFiles::new(&tempdir(&format!("join-reconnect-{attempt}")));
+            seed_player_states(&host_files, &join_files);
+
+            let deadline = Instant::now() + Duration::from_secs(15);
+            let (host_result, join_result) = connect_and_drive(
+                &addr,
+                code,
+                host_files.clone(),
+                join_files.clone(),
+                deadline,
+                |a| a.sent_player_state && a.received_player_state,
+                |a| a.sent_player_state && a.received_player_state,
+            );
+            host_result.unwrap_or_else(|e| panic!("attempt {attempt}: host relay loop failed: {e}"));
+            join_result.unwrap_or_else(|e| panic!("attempt {attempt}: join relay loop failed: {e}"));
+            // Each iteration is a genuinely fresh session (see README.md).
+        }
+    }
+
+    #[test]
+    fn host_shutdown_mid_session_is_observed_by_peer() {
+        let _lock = gns_test_lock().lock().unwrap();
+        let (_server, addr) = spawn_signal_server();
+        let gns_host = Gns::init().expect("GNS init (host)");
+        let gns_join = Gns::init().expect("GNS init (join)");
+
+        let (host_conn, join_conn) = connect_pair_raw(&gns_host, &gns_join, &addr, "SHUTDOWN1");
+        assert_eq!(join_conn.state(), ConnectionState::Connected);
+
+        drop(host_conn); // simulates the host process going away mid-session
+
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            gns_join.run_callbacks();
+            if join_conn.state() != ConnectionState::Connected {
+                return; // peer noticed — test passes
+            }
+            if Instant::now() > deadline {
+                panic!("join side never noticed host shutdown; still Connected after the deadline");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn concurrent_independent_sessions_do_not_interfere() {
+        let _lock = gns_test_lock().lock().unwrap();
+        let (_server, addr) = spawn_signal_server();
+
+        let run_session = |code: &'static str, tag: &'static str| {
+            let addr = addr.clone();
+            thread::spawn(move || {
+                let host_files = SharedFiles::new(&tempdir(&format!("host-concurrent-{tag}")));
+                let join_files = SharedFiles::new(&tempdir(&format!("join-concurrent-{tag}")));
+                file_store::write_atomic(
+                    &host_files.local_state,
+                    format!(r#"{{"player_id":"host-{tag}","tag":"{tag}"}}"#).as_bytes(),
+                )
+                .unwrap();
+
+                let deadline = Instant::now() + Duration::from_secs(15);
+                let (host_result, join_result) = connect_and_drive(
+                    &addr,
+                    code,
+                    host_files.clone(),
+                    join_files.clone(),
+                    deadline,
+                    |a| a.sent_player_state,
+                    |a| a.received_player_state,
+                );
+                host_result.unwrap();
+                join_result.unwrap();
+
+                let received = file_store::read_shared(&join_files.remote_state).unwrap().unwrap();
+                match RelayMessage::parse(&received).unwrap() {
+                    RelayMessage::PlayerState { player_id, .. } => assert_eq!(player_id, format!("host-{tag}")),
+                    other => panic!("expected PlayerState, got {other:?}"),
+                }
+            })
+        };
+
+        let session_a = run_session("CONCURA", "a");
+        let session_b = run_session("CONCURB", "b");
+        session_a.join().unwrap();
+        session_b.join().unwrap();
+    }
+
+    #[test]
+    fn connection_survives_simulated_lag_and_packet_loss() {
+        let _lock = gns_test_lock().lock().unwrap();
+        let (_server, addr) = spawn_signal_server();
+        let gns_for_conditions = Gns::init().expect("GNS init (conditions)");
+
+        struct ResetConditionsOnDrop<'g>(&'g Gns);
+        impl Drop for ResetConditionsOnDrop<'_> {
+            fn drop(&mut self) {
+                self.0.clear_simulated_network_conditions();
+            }
+        }
+        gns_for_conditions.simulate_network_conditions(5.0, 50);
+        let _reset_guard = ResetConditionsOnDrop(&gns_for_conditions);
+
+        let host_files = SharedFiles::new(&tempdir("host-lag-loss"));
+        let join_files = SharedFiles::new(&tempdir("join-lag-loss"));
+        seed_player_states(&host_files, &join_files);
+
+        // Generous deadline: 5% loss + 50ms lag slows the handshake and
+        // retransmits noticeably versus loopback-with-no-degradation.
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let (host_result, join_result) = connect_and_drive(
+            &addr,
+            "LAGLOSS",
+            host_files.clone(),
+            join_files.clone(),
+            deadline,
+            |a| a.sent_player_state && a.received_player_state,
+            |a| a.sent_player_state && a.received_player_state,
+        );
+        host_result.expect("host relay loop failed under simulated lag/loss");
+        join_result.expect("join relay loop failed under simulated lag/loss");
     }
 }
