@@ -3,7 +3,10 @@ name = "mp-installer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Standalone, MOMI-aware, migration-safe installer. See plan milestone 6 / Linear TNS-10."
+description = "Standalone, MOMI-aware, migration-safe installer. See plan milestone 6 / Linear TNS-17."
+
+[dependencies]
+json = { path = "../../crates/json" }
 
 [[bin]]
 name = "mp-installer"
