@@ -54,13 +54,56 @@ fields. `Release()` is a C++ inline method in the real header
 (`m_pfnRelease(this)`); `SteamNetworkingMessage_t::release()` replicates
 that call manually rather than declaring it as callable from Rust.
 
+## `ESteamNetworkingConfigValue`/`DataType`
+
+Only the entries this workspace actually sets are bound; see the enum's
+full definition in the pinned header for the rest.
+
+## `SteamNetworkingIPAddr`
+
+Under the same `#pragma pack(push,1)` region as `SteamNetworkingIdentity`.
+Only needed as an opaque, correctly-sized blob (zeroed for "unknown", or
+passed straight through by the flat helper functions), never interpreted
+field-by-field on the Rust side — so the union's IPv4-mapped variant isn't
+transcribed separately.
+
+## `SteamNetConnectionInfo_t`
+
+Transcribed field-for-field, including the explicit `m__pad1` padding the
+real header inserts between `m_addrRemote` and `m_idPOPRemote`. `packed(1)`
+throughout; every offset verified against the real compiled header in
+`tests/layout.rs`.
+
+## `SteamNetworkingConfigValue_t`
+
+Not under any active pack pragma in the real header; plain `#[repr(C)]`
+reproduces the real size/align/offsets exactly (verified in
+`tests/layout.rs`) because every field here is already naturally aligned.
+
 ## Opaque interface handles
 
-`ISteamNetworkingSockets` is a C++ class with a vtable; the flat API takes
-an opaque pointer to it as every function's first argument and dispatches
-through the vtable on the C++ side. We never need to know its layout —
-that's the entire point of the flat API — so it's represented as an empty
-enum, the standard Rust idiom for an FFI type only ever held as a pointer.
+`ISteamNetworkingSockets` and `ISteamNetworkingConnectionSignaling` are
+C++ classes with vtables; the flat API takes an opaque pointer to each as
+a function argument and dispatches through the vtable on the C++ side. We
+never need to know their layout — that's the entire point of the flat API
+— so each is represented as an empty enum, the standard Rust idiom for an
+FFI type only ever held as a pointer.
+
+## Custom signaling: a plain-C bridge, not a hand-rolled vtable
+
+GNS's custom signaling is normally a pair of C++ abstract classes
+(`ISteamNetworkingConnectionSignaling`/`ISteamNetworkingSignalingRecvContext`)
+that an app implements. Hand-rolling a Rust type with a real Itanium-ABI
+vtable to satisfy those is exactly the kind of memory-unsafe FFI this
+project's dependency policy exists to avoid.
+
+The flat header already anticipates this: `CreateCustomSignaling`/
+`ReceivedP2PCustomSignal2` are a plain-C bridge (`void *ctx` + function
+pointers) to the same functionality, so that's what's bound here instead
+— no vtable ABI risk. A C++ `const T&` reference parameter is also
+ABI-identical to `const T*` (a non-null pointer) for every compiler this
+project targets, so the callback typedefs below use pointer types in
+place of the header's reference params.
 
 ## `build.rs`
 
