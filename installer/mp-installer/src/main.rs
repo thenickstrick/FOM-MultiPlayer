@@ -1,9 +1,11 @@
 //! mp-installer: standalone installer. See `README.md` for usage and design.
 
+mod legacy;
 mod locator;
 mod package;
 
 use std::path::PathBuf;
+use std::time::{Duration, SystemTime};
 
 // Mod identity: see README.md.
 const MOD_NAME: &str = "Multiplayer";
@@ -46,6 +48,17 @@ fn main() {
         std::process::exit(1);
     };
     eprintln!("mp-installer: using mods folder {}", mods_location.display());
+
+    if legacy::remove_legacy_mod(&mods_location).unwrap_or(false) {
+        eprintln!("mp-installer: removed legacy {} mod folder", legacy::LEGACY_MOD_ID);
+    }
+
+    if let Some(dir) = legacy::find_recently_active_legacy_relay_dir(SystemTime::now(), Duration::from_secs(60)) {
+        eprintln!(
+            "mp-installer: warning: an old relay process might still be running, pointed at {} (its mp_control.json was written in the last minute) — close it before using the new multiplayer mod",
+            dir.display()
+        );
+    }
 
     let manifest = package::ModManifest {
         name: MOD_NAME.to_string(),

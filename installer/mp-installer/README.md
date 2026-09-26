@@ -76,3 +76,26 @@ identity MOMI uses to detect an already-installed mod.
 overwrites the manifest and replaces `gml/` wholesale (removing stale
 files from a previous version) rather than failing because the directory
 already exists.
+
+## `legacy`: migration and the conflicting-process warning
+
+`LEGACY_MOD_ID` (`deulo.multiplayer`) is the old mod's MOMI id, through
+the same lowercase-dotted derivation as `package::ModManifest::mod_id`.
+`remove_legacy_mod` deletes it before installing the new mod — otherwise
+MOMI would hit a top-level GML namespace collision merging both mods'
+`gml/` together.
+
+`find_recently_active_legacy_relay_dir` is a best-effort signal that an
+old relay-based process might still be running and writing to its
+shared-file directory. It mirrors the legacy relay's own
+`RelayDirectories.ResolveMpDir` (multiple `momi_mp*`/instance folders
+under the FieldsOfMistria AppData root); a directory counts as "possibly
+active" if its `mp_control.json` was modified recently. This is not a
+real running-process check — there's no pid/lock file convention to check
+against, only this recency heuristic, the same one the legacy relay
+itself already uses to pick which instance is current.
+
+Windows-only for now: on Linux the game runs through Steam Play/Proton,
+whose AppData lives inside a per-app `compatdata` prefix keyed by the
+game's Steam App ID, which isn't tracked anywhere in this project. This
+returns nothing there rather than guess at that path.

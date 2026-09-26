@@ -20,6 +20,9 @@ version = "0.1.0"
 [[package]]
 name = "mp-installer"
 version = "0.1.0"
+dependencies = [
+ "json",
+]
 
 [[package]]
 name = "mp-proto"
