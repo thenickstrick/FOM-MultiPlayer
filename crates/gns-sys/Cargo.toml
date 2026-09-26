@@ -1,0 +1,11 @@
+[package]
+name = "gns-sys"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+description = "Hand-written FFI bindings to GameNetworkingSockets' flat C API. No external crates: see docs/dependency-policy.md."
+
+[lib]
+name = "gns_sys"
+path = "src/lib.rs"

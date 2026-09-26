@@ -1,0 +1,10 @@
+[package]
+name = "mp-installer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Standalone, MOMI-aware, migration-safe installer. See plan milestone 6 / Linear TNS-10."
+
+[[bin]]
+name = "mp-installer"
+path = "src/main.rs"

@@ -1,0 +1,10 @@
+[package]
+name = "mp-signal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Room-code rendezvous relay over plain TCP. See plan milestone 3 / Linear TNS-7."
+
+[[bin]]
+name = "mp-signal"
+path = "src/main.rs"

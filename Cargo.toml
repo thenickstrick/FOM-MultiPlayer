@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/gns-sys",
+    "crates/gns",
+    "crates/json",
+    "crates/mp-proto",
+    "crates/mp-relay",
+    "crates/mp-signal",
+    "installer/mp-installer",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+# Dependency policy: no external crates. Every workspace member depends only
+# on std and on other workspace members. See docs/dependency-policy.md.

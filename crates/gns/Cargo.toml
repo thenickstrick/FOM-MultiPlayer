@@ -1,0 +1,9 @@
+[package]
+name = "gns"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Safe Rust wrapper over gns-sys. Not yet implemented (plan milestone 4, mp-relay core)."
+
+[dependencies]
+gns-sys = { path = "../gns-sys" }

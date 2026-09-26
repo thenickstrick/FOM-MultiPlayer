@@ -1,0 +1,9 @@
+[package]
+name = "mp-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared-file protocol schema (PlayerState, RelayControl, snapshot framing), built on `json`. See plan milestone 4 / Linear TNS-8."
+
+[dependencies]
+json = { path = "../json" }
