@@ -117,3 +117,18 @@ Per-platform link libraries, beyond GNS itself, OpenSSL, and protobuf:
   in libc++ automatically the way MSVC's does its runtime), plus the
   `CoreFoundation`/`Security` frameworks GNS's crypto/cert code touches.
 - **Linux**: `stdc++` (same reason as macOS's `c++`) and `pthread`.
+- **Windows**: `ws2_32`, `crypt32`, `winmm`, `iphlpapi` — GNS's own
+  unconditional Windows link requirements (`src/CMakeLists.txt`'s
+  `CMAKE_SYSTEM_NAME MATCHES Windows` branch): sockets, certificate store
+  access, a high-resolution timer, and network interface enumeration for
+  ICE candidate gathering. No explicit C++ runtime link needed here,
+  unlike macOS/Linux — MSVC object files carry their own `/DEFAULTLIB`
+  directives for the CRT/STL, which the linker honors automatically.
+
+The static lib's output filename also differs by platform: MSVC's
+convention is `NAME.lib`, not the Unix `libNAME.a` this CMake build
+produces everywhere else — `build.rs` picks the right one to search for.
+
+OpenSSL/protobuf discovery on Windows is unverified: it currently relies
+on CMake's default `find_package` search, and a vcpkg install will likely
+need `CMAKE_TOOLCHAIN_FILE` wired in some way this doesn't do yet.

@@ -61,10 +61,17 @@ fn main() {
         .arg("--parallel");
     run(&mut build, "cmake build");
 
-    // The static lib's exact output directory can vary by generator; search
-    // for it rather than assuming a fixed path.
-    let lib_dir = find_dir_containing(&build_dir, "libGameNetworkingSockets_s.a")
-        .unwrap_or_else(|| panic!("built but couldn't find libGameNetworkingSockets_s.a under {}", build_dir.display()));
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+
+    // Output directory varies by generator; filename varies by platform
+    // (see README.md), so search for it rather than assuming a path.
+    let static_lib_filename = if target_os == "windows" {
+        "GameNetworkingSockets_s.lib"
+    } else {
+        "libGameNetworkingSockets_s.a"
+    };
+    let lib_dir = find_dir_containing(&build_dir, static_lib_filename)
+        .unwrap_or_else(|| panic!("built but couldn't find {static_lib_filename} under {}", build_dir.display()));
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static=GameNetworkingSockets_s");
 
@@ -81,7 +88,6 @@ fn main() {
     }
     println!("cargo:rustc-link-lib=protobuf");
 
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     match target_os.as_str() {
         "macos" => {
             println!("cargo:rustc-link-lib=c++");
@@ -91,6 +97,13 @@ fn main() {
         "linux" => {
             println!("cargo:rustc-link-lib=stdc++");
             println!("cargo:rustc-link-lib=pthread");
+        }
+        "windows" => {
+            // GNS's own required libs, no separate C++ runtime (README.md).
+            println!("cargo:rustc-link-lib=ws2_32");
+            println!("cargo:rustc-link-lib=crypt32");
+            println!("cargo:rustc-link-lib=winmm");
+            println!("cargo:rustc-link-lib=iphlpapi");
         }
         _ => {}
     }
