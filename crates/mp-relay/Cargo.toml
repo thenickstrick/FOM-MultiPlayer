@@ -3,10 +3,11 @@ name = "mp-relay"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "The native companion process: shared-file loop + GNS P2P connection. See plan milestone 4 / Linear TNS-8."
+description = "The native companion process: shared-file loop + GNS P2P connection. See plan milestone 4 / Linear TNS-14."
 
 [dependencies]
 gns = { path = "../gns" }
+json = { path = "../json" }
 mp-proto = { path = "../mp-proto" }
 
 [[bin]]

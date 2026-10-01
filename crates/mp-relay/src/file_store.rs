@@ -85,9 +85,12 @@ mod tests {
     use std::sync::Arc;
 
     fn tempdir() -> std::path::PathBuf {
+        // Thread id closes a real collision gap: concurrent tests can
+        // land in the same clock tick (see git history).
         let dir = std::env::temp_dir().join(format!(
-            "mp-relay-file-store-test-{}-{}",
+            "mp-relay-file-store-test-{}-{:?}-{}",
             std::process::id(),
+            std::thread::current().id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()

@@ -33,6 +33,7 @@ name = "mp-relay"
 version = "0.1.0"
 dependencies = [
  "gns",
+ "json",
  "mp-proto",
 ]
 
